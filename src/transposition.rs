@@ -1,6 +1,9 @@
 use std::sync::atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering};
 
-use crate::types::{Move, Score, is_decisive, is_loss, is_valid, is_win};
+use crate::{
+    board::Board,
+    types::{Move, Score, is_decisive, is_loss, is_valid, is_win},
+};
 
 pub const DEFAULT_TT_SIZE: usize = 16;
 
@@ -156,7 +159,7 @@ impl TranspositionTable {
         self.age.store((self.age() + 1) & AGE_MASK, Ordering::Relaxed);
     }
 
-    pub fn read(&self, hash: u64, halfmove_clock: u8, ply: isize) -> Option<Entry> {
+    pub fn read(&self, hash: u64, halfmove_clock: u8, ply: isize, board: &Board) -> Option<Entry> {
         let cluster = {
             let index = index(hash, self.len());
             unsafe { &*self.ptr().add(index) }
@@ -175,7 +178,11 @@ impl TranspositionTable {
                     mv: entry.mv,
                 };
 
-                return Some(hit);
+                if hit.mv.is_null() || board.is_legal(hit.mv) {
+                    return Some(hit);
+                } else {
+                    return None;
+                }
             }
         }
 
@@ -185,7 +192,7 @@ impl TranspositionTable {
     #[allow(clippy::too_many_arguments)]
     pub fn write(
         &self, hash: u64, depth: i32, raw_eval: i32, mut score: i32, bound: Bound, mv: Move, ply: isize, tt_pv: bool,
-        force: bool,
+        force: bool, board: &Board,
     ) {
         // Used for checking if an entry exists
         debug_assert!(depth != TtDepth::NONE);
@@ -216,7 +223,7 @@ impl TranspositionTable {
 
         let entry = replacement_slot.unwrap();
 
-        if !(entry.key == key && mv.is_null()) {
+        if entry.key != key || !mv.is_null() || !board.is_legal(entry.mv) {
             entry.mv = mv;
         }
 
