@@ -1,4 +1,7 @@
-use std::{mem::MaybeUninit, ops::Index};
+use std::{
+    mem::MaybeUninit,
+    ops::{Deref, DerefMut, Index},
+};
 
 use crate::types::MoveEntry;
 
@@ -33,6 +36,12 @@ impl<T: Copy, const N: usize> ArrayVec<T, N> {
 
         unsafe { self.data[self.len].as_mut_ptr().write(value) };
         self.len += 1;
+    }
+
+    pub fn pop(&mut self) -> T {
+        debug_assert!(self.len > 0);
+        self.len -= 1;
+        unsafe { self.data[self.len].assume_init_read() }
     }
 
     pub fn maybe_push(&mut self, mask: bool, value: T) {
@@ -105,5 +114,19 @@ impl<const N: usize, T: Copy> Index<usize> for ArrayVec<T, N> {
 
     fn index(&self, index: usize) -> &Self::Output {
         unsafe { &*self.data.get_unchecked(index).as_ptr() }
+    }
+}
+
+impl<const N: usize, T: Copy> Deref for ArrayVec<T, N> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { std::slice::from_raw_parts(self.data.as_ptr().cast(), self.len) }
+    }
+}
+
+impl<const N: usize, T: Copy> DerefMut for ArrayVec<T, N> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { std::slice::from_raw_parts_mut(self.data.as_mut_ptr().cast(), self.len) }
     }
 }

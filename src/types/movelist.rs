@@ -1,4 +1,4 @@
-use std::ops::Index;
+use std::ops::{Deref, DerefMut, Index};
 
 use super::{ArrayVec, Bitboard, MAX_MOVES, Move, MoveKind, Square};
 
@@ -6,6 +6,8 @@ use super::{ArrayVec, Bitboard, MAX_MOVES, Move, MoveKind, Square};
 #[repr(C)]
 pub struct MoveEntry {
     pub mv: Move,
+    // explicit padding to ensure there's no uninit bytes, so we can safely transmute to i64
+    _pad: u16,
     pub score: i32,
 }
 
@@ -27,7 +29,7 @@ impl MoveList {
     }
 
     pub fn push(&mut self, from: Square, to: Square, kind: MoveKind) {
-        self.inner.push(MoveEntry { mv: Move::new(from, to, kind), score: 0 });
+        self.inner.push(MoveEntry { mv: Move::new(from, to, kind), _pad: 0, score: 0 });
     }
 
     #[cfg(not(target_feature = "avx512vbmi2"))]
@@ -125,6 +127,10 @@ impl MoveList {
     pub const fn remove(&mut self, index: usize) -> MoveEntry {
         self.inner.swap_remove(index)
     }
+
+    pub fn pop(&mut self) -> MoveEntry {
+        self.inner.pop()
+    }
 }
 
 impl Index<usize> for MoveList {
@@ -138,5 +144,19 @@ impl Index<usize> for MoveList {
 impl Default for MoveList {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Deref for MoveList {
+    type Target = [MoveEntry];
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for MoveList {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
     }
 }

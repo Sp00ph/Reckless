@@ -25,6 +25,50 @@ pub struct MovePicker {
     bad_noisy_idx: usize,
 }
 
+// #[cfg(target_feature = "avx512f")]
+#[target_feature(enable = "avx512f")]
+fn sort_8(entries: &mut [MoveEntry]) {
+    use std::arch::x86_64::*;
+
+    assert!(0 < entries.len() && entries.len() <= 8);
+    let mask = u8::MAX >> (8 - entries.len());
+
+    // Consider not using a masked load, as they're slower than unmasked. Would require the first 8
+    // elements of the vector to be initialized to avoid UB.
+    let mut vec = unsafe { _mm512_mask_loadu_epi64(_mm512_set1_epi64(i64::MAX), mask, entries.as_ptr().cast()) };
+
+    macro_rules! layer {
+        ($a:expr, $max_mask:expr, [$($perm:expr),+]) => {{
+            let p = _mm512_permutexvar_epi64(_mm512_setr_epi64($($perm),+), $a);
+            let min = _mm512_min_epi64($a, p);
+            let max = _mm512_max_epi64($a, p);
+            _mm512_mask_blend_epi64($max_mask, min, max)
+        }
+    }}
+
+    // We sort using a bitonic sorting network, where each layer is done fully in parallel.
+    vec = layer!(vec, 0b01010101, [1, 0, 3, 2, 5, 4, 7, 6]);
+    vec = layer!(vec, 0b00110011, [3, 2, 1, 0, 7, 6, 5, 4]);
+    vec = layer!(vec, 0b01010101, [1, 0, 3, 2, 5, 4, 7, 6]);
+    vec = layer!(vec, 0b00001111, [7, 6, 5, 4, 3, 2, 1, 0]);
+    vec = layer!(vec, 0b00110011, [2, 3, 0, 1, 6, 7, 4, 5]);
+    vec = layer!(vec, 0b01010101, [1, 0, 3, 2, 5, 4, 7, 6]);
+
+    // Same as above, consider unmasked store.
+    unsafe { _mm512_mask_storeu_epi64(entries.as_mut_ptr().cast(), mask, vec) }
+}
+
+fn sort_entries(entries: &mut [MoveEntry]) {
+    match entries.len() {
+        0 => return,
+        1..=8 if cfg!(target_feature = "avx512f") => unsafe { sort_8(entries) },
+        n => {
+            let vals = unsafe { std::slice::from_raw_parts_mut(entries.as_mut_ptr().cast::<i64>(), n) };
+            vals.sort_unstable();
+        }
+    }
+}
+
 impl MovePicker {
     pub const fn new(tt_move: Move) -> Self {
         Self {
@@ -141,16 +185,7 @@ impl MovePicker {
     }
 
     fn get_best_entry(&mut self) -> MoveEntry {
-        let mut best_index = 0;
-        let mut best_score = i32::MIN;
-
-        for (index, entry) in self.list.iter().enumerate() {
-            if entry.score >= best_score {
-                best_index = index;
-                best_score = entry.score;
-            }
-        }
-        self.list.remove(best_index)
+        self.list.pop()
     }
 
     fn score_noisy(&mut self, td: &ThreadData) {
@@ -166,6 +201,7 @@ impl MovePicker {
                 + 4000 * (mv.is_promotion() && mv.promo_piece_type() == PieceType::Queen) as i32
                 + (200000 - 20000 * pt as i32) * td.board.in_check() as i32;
         }
+        sort_entries(&mut self.list);
     }
 
     fn score_quiet(&mut self, td: &ThreadData, ply: isize) {
@@ -225,5 +261,6 @@ impl MovePicker {
                 + 5000 * offense[pt].contains(mv.to()) as i32
                 - 4000 * wall_pawns.contains(mv.from()) as i32;
         }
+        sort_entries(&mut self.list);
     }
 }
