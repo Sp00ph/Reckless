@@ -43,7 +43,7 @@ fn sort_8(entries: &mut [MoveEntry]) {
             let p = _mm512_permutexvar_epi64(_mm512_setr_epi64($($perm),+), $a);
             let min = _mm512_min_epi64($a, p);
             let max = _mm512_max_epi64($a, p);
-            _mm512_mask_blend_epi64($max_mask, min, max)
+            _mm512_mask_blend_epi64($max_mask, max, min)
         }
     }}
 
