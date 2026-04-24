@@ -21,11 +21,12 @@ pub struct MovePicker {
     tt_move: Move,
     threshold: Option<i32>,
     stage: Stage,
+    sorted: bool,
     bad_noisy: ArrayVec<Move, MAX_MOVES>,
     bad_noisy_idx: usize,
 }
 
-// #[cfg(target_feature = "avx512f")]
+#[cfg(target_feature = "avx512f")]
 #[target_feature(enable = "avx512f")]
 fn sort_8(entries: &mut [MoveEntry]) {
     use std::arch::x86_64::*;
@@ -58,14 +59,20 @@ fn sort_8(entries: &mut [MoveEntry]) {
     unsafe { _mm512_mask_storeu_epi64(entries.as_mut_ptr().cast(), mask, vec) }
 }
 
-fn sort_entries(entries: &mut [MoveEntry]) {
+fn sort_entries(entries: &mut [MoveEntry]) -> bool {
     match entries.len() {
-        0 => return,
-        1..=8 if cfg!(target_feature = "avx512f") => unsafe { sort_8(entries) },
-        n => {
-            let vals = unsafe { std::slice::from_raw_parts_mut(entries.as_mut_ptr().cast::<i64>(), n) };
-            vals.sort_unstable();
+        0 => return true,
+        1..=8 => {
+            cfg_select! {
+                target_feature = "avx512f" => unsafe { sort_8(entries) },
+                _ => unsafe {
+                    let entries = std::slice::from_raw_parts_mut(entries.as_mut_ptr().cast::<i64>(), entries.len());
+                    entries.sort_unstable();
+                }
+            }
+            return true;
         }
+        _ => return false,
     }
 }
 
@@ -76,6 +83,7 @@ impl MovePicker {
             tt_move,
             threshold: None,
             stage: if tt_move.is_present() { Stage::HashMove } else { Stage::GenerateNoisy },
+            sorted: false,
             bad_noisy: ArrayVec::new(),
             bad_noisy_idx: 0,
         }
@@ -87,6 +95,7 @@ impl MovePicker {
             tt_move: Move::NULL,
             threshold: Some(threshold),
             stage: Stage::GenerateNoisy,
+            sorted: false,
             bad_noisy: ArrayVec::new(),
             bad_noisy_idx: 0,
         }
@@ -98,6 +107,7 @@ impl MovePicker {
             tt_move: Move::NULL,
             threshold: None,
             stage: Stage::GenerateNoisy,
+            sorted: false,
             bad_noisy: ArrayVec::new(),
             bad_noisy_idx: 0,
         }
@@ -185,7 +195,20 @@ impl MovePicker {
     }
 
     fn get_best_entry(&mut self) -> MoveEntry {
-        self.list.pop()
+        if self.sorted {
+            self.list.pop()
+        } else {
+            let mut best_index = 0;
+            let mut best_score = i32::MIN;
+
+            for (index, entry) in self.list.iter().enumerate() {
+                if entry.score >= best_score {
+                    best_index = index;
+                    best_score = entry.score;
+                }
+            }
+            self.list.remove(best_index)
+        }
     }
 
     fn score_noisy(&mut self, td: &ThreadData) {
@@ -201,7 +224,7 @@ impl MovePicker {
                 + 4000 * (mv.is_promotion() && mv.promo_piece_type() == PieceType::Queen) as i32
                 + (200000 - 20000 * pt as i32) * td.board.in_check() as i32;
         }
-        sort_entries(&mut self.list);
+        self.sorted = sort_entries(&mut self.list);
     }
 
     fn score_quiet(&mut self, td: &ThreadData, ply: isize) {
@@ -261,6 +284,6 @@ impl MovePicker {
                 + 5000 * offense[pt].contains(mv.to()) as i32
                 - 4000 * wall_pawns.contains(mv.from()) as i32;
         }
-        sort_entries(&mut self.list);
+        self.sorted = sort_entries(&mut self.list);
     }
 }
