@@ -63,12 +63,15 @@ fn sort_entries(entries: &mut [MoveEntry]) -> bool {
     match entries.len() {
         0 => return true,
         1..=8 => {
-            cfg_select! {
-                target_feature = "avx512f" => unsafe { sort_8(entries) },
-                _ => unsafe {
-                    let entries = std::slice::from_raw_parts_mut(entries.as_mut_ptr().cast::<i64>(), entries.len());
-                    entries.sort_unstable();
-                }
+            #[cfg(target_feature = "avx512f")]
+            unsafe {
+                sort_8(entries)
+            }
+
+            #[cfg(not(target_feature = "avx512f"))]
+            unsafe {
+                let entries = std::slice::from_raw_parts_mut(entries.as_mut_ptr().cast::<i64>(), entries.len());
+                entries.sort_unstable();
             }
             return true;
         }
