@@ -36,7 +36,7 @@ impl<T> HugeBox<T> {
                 alloc::handle_alloc_error(Self::LAYOUT);
             }
             #[cfg(target_os = "linux")]
-            libc::madvise(p.cast(), size_of::<T>(), libc::MADV_HUGEPAGE);
+            libc::madvise(p.cast(), Self::SIZE, libc::MADV_HUGEPAGE);
             NonNull::new_unchecked(p.cast::<T>())
         };
 
