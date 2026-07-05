@@ -1,10 +1,16 @@
-use std::sync::atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering};
+use std::{
+    alloc::{self, Layout},
+    mem::MaybeUninit,
+    sync::atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering},
+};
 
 use crate::types::{Move, Score, is_decisive, is_loss, is_valid, is_win};
 
 pub const DEFAULT_TT_SIZE: usize = 16;
 
 const MEGABYTE: usize = 1024 * 1024;
+// Force 2MiB alignment to match hugepage aligment
+const TT_ALIGN: usize = 1 << 21;
 const CLUSTER_SIZE: usize = std::mem::size_of::<Cluster>();
 
 const ENTRIES_PER_CLUSTER: usize = 3;
@@ -362,23 +368,19 @@ impl Drop for TranspositionTable {
 }
 
 unsafe fn allocate(threads: usize, size_mb: usize) -> (*mut Cluster, usize) {
-    #[cfg(target_os = "linux")]
-    use libc::{MADV_HUGEPAGE, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE, madvise, mmap};
-
     let size = size_mb * MEGABYTE;
     let len = size / CLUSTER_SIZE;
 
-    #[cfg(target_os = "linux")]
     let ptr = {
-        let ptr = mmap(std::ptr::null_mut(), size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        madvise(ptr, size, MADV_HUGEPAGE);
-        ptr.cast()
-    };
+        let layout = Layout::from_size_align(size, TT_ALIGN).unwrap();
+        let ptr = alloc::alloc(layout);
+        if ptr.is_null() {
+            alloc::handle_alloc_error(layout);
+        }
+        #[cfg(target_os = "linux")]
+        libc::madvise(ptr.cast(), len, libc::MADV_HUGEPAGE);
 
-    #[cfg(not(target_os = "linux"))]
-    let ptr = {
-        let layout = std::alloc::Layout::from_size_align(size, std::mem::align_of::<Cluster>()).unwrap();
-        std::alloc::alloc_zeroed(layout).cast()
+        ptr.cast()
     };
 
     unsafe { parallel_clear(threads, ptr, len) };
@@ -387,21 +389,15 @@ unsafe fn allocate(threads: usize, size_mb: usize) -> (*mut Cluster, usize) {
 
 unsafe fn deallocate(ptr: *mut Cluster, len: usize) {
     let size = len * CLUSTER_SIZE;
-
-    #[cfg(target_os = "linux")]
-    let _ = libc::munmap(ptr.cast(), size);
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        let layout = std::alloc::Layout::from_size_align(size, std::mem::align_of::<Cluster>()).unwrap();
-        std::alloc::dealloc(ptr.cast(), layout);
-    }
+    let layout = Layout::from_size_align(size, TT_ALIGN).unwrap();
+    alloc::dealloc(ptr.cast(), layout);
 }
 
 unsafe fn parallel_clear<T: std::marker::Send>(threads: usize, ptr: *mut T, len: usize) {
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::scope(|scope| {
-        let slice = std::slice::from_raw_parts_mut(ptr, len);
+        // Cast to MaybeUninit as the memory may be uninitialized if called from allocate()
+        let slice = std::slice::from_raw_parts_mut(ptr.cast::<MaybeUninit<T>>(), len);
 
         let chunk_size = len.div_ceil(threads);
         for chunk in slice.chunks_mut(chunk_size) {

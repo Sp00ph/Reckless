@@ -1,4 +1,8 @@
-use std::sync::atomic::{AtomicI16, Ordering};
+use std::{
+    alloc::{self, Layout},
+    ptr::NonNull,
+    sync::atomic::{AtomicI16, Ordering},
+};
 
 use crate::types::{Bitboard, Color, Move, Piece, PieceType, Square};
 
@@ -6,36 +10,34 @@ type FromToHistory<T> = [[T; 64]; 64];
 type PieceToHistory<T> = [[T; 64]; 13];
 type ContinuationHistoryType = [[[[PieceToHistory<i16>; 64]; 13]; 2]; 2];
 
+// Force 2MiB alignment to match hugepage aligment
+const MIN_ALIGN: usize = 1 << 21;
+
 struct HugeBox<T> {
-    ptr: std::ptr::NonNull<T>,
+    ptr: NonNull<T>,
 }
 
 unsafe impl<T: Send> Send for HugeBox<T> {}
 unsafe impl<T: Sync> Sync for HugeBox<T> {}
 
 impl<T> HugeBox<T> {
-    fn new_zeroed() -> Self {
-        #[cfg(target_os = "linux")]
-        let ptr = unsafe {
-            use libc::{MADV_HUGEPAGE, MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, PROT_READ, PROT_WRITE, madvise, mmap};
-            let size = std::mem::size_of::<T>();
-            assert!(size > 0, "HugeBox requires a non-zero-sized type");
-            let p = mmap(std::ptr::null_mut(), size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-            if p == MAP_FAILED {
-                std::alloc::handle_alloc_error(std::alloc::Layout::new::<T>());
-            }
-            madvise(p, size, MADV_HUGEPAGE);
-            std::ptr::NonNull::new_unchecked(p.cast::<T>())
-        };
+    const ALIGN: usize = if MIN_ALIGN >= align_of::<T>() { MIN_ALIGN } else { align_of::<T>() };
+    const SIZE: usize = size_of::<T>().next_multiple_of(Self::ALIGN);
+    // FIXME: Just .unwrap() once that works in const.
+    const LAYOUT: Layout = match Layout::from_size_align(Self::SIZE, Self::ALIGN) {
+        Ok(layout) => layout,
+        Err(_) => unreachable!(),
+    };
 
-        #[cfg(not(target_os = "linux"))]
+    fn new_zeroed() -> Self {
         let ptr = unsafe {
-            let layout = std::alloc::Layout::new::<T>();
-            let p = std::alloc::alloc_zeroed(layout);
+            let p = alloc::alloc_zeroed(Self::LAYOUT);
             if p.is_null() {
-                std::alloc::handle_alloc_error(layout);
+                alloc::handle_alloc_error(Self::LAYOUT);
             }
-            std::ptr::NonNull::new_unchecked(p.cast::<T>())
+            #[cfg(target_os = "linux")]
+            libc::madvise(p.cast(), size_of::<T>(), libc::MADV_HUGEPAGE);
+            NonNull::new_unchecked(p.cast::<T>())
         };
 
         HugeBox { ptr }
@@ -57,19 +59,8 @@ impl<T> std::ops::DerefMut for HugeBox<T> {
 
 impl<T> Drop for HugeBox<T> {
     fn drop(&mut self) {
-        #[cfg(target_os = "linux")]
-        {
-            let size = std::mem::size_of::<T>();
-            assert!(size > 0, "HugeBox requires a non-zero-sized type");
-            unsafe {
-                libc::munmap(self.ptr.as_ptr().cast(), size);
-            }
-        }
-
-        #[cfg(not(target_os = "linux"))]
         unsafe {
-            let layout = std::alloc::Layout::new::<T>();
-            std::alloc::dealloc(self.ptr.as_ptr().cast(), layout);
+            alloc::dealloc(self.ptr.as_ptr().cast(), Self::LAYOUT);
         }
     }
 }
@@ -256,10 +247,10 @@ impl Default for ContinuationHistory {
 
 fn zeroed_box<T>() -> Box<T> {
     unsafe {
-        let layout = std::alloc::Layout::new::<T>();
-        let ptr = std::alloc::alloc_zeroed(layout);
+        let layout = Layout::new::<T>();
+        let ptr = alloc::alloc_zeroed(layout);
         if ptr.is_null() {
-            std::alloc::handle_alloc_error(layout);
+            alloc::handle_alloc_error(layout);
         }
         Box::<T>::from_raw(ptr.cast())
     }
