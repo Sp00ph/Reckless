@@ -378,7 +378,7 @@ unsafe fn allocate(threads: usize, size_mb: usize) -> (*mut Cluster, usize) {
             alloc::handle_alloc_error(layout);
         }
         #[cfg(target_os = "linux")]
-        libc::madvise(ptr.cast(), len, libc::MADV_HUGEPAGE);
+        libc::madvise(ptr.cast(), size, libc::MADV_HUGEPAGE);
 
         ptr.cast()
     };
