@@ -39,38 +39,34 @@ pub fn generate_diagonal_tables() -> [[u64; 64]; 2] {
     ]
 }
 
-pub fn generate_rook_map() -> Vec<u64> {
-    generate_sliding_map(ROOK_MAP_SIZE, &ROOK_MAGICS, &[8, -8, 1, -1])
+const SLIDERS_LEN: usize = 77519;
+
+pub fn generate_sliding_map() -> Vec<u64> {
+    let mut map = vec![0; SLIDERS_LEN];
+    init_sliding_map(&ROOK_MAGICS, &[8, -8, 1, -1], &mut map);
+    init_sliding_map(&BISHOP_MAGICS, &[9, 7, -7, -9], &mut map);
+    map
 }
 
-pub fn generate_bishop_map() -> Vec<u64> {
-    generate_sliding_map(BISHOP_MAP_SIZE, &BISHOP_MAGICS, &[9, 7, -7, -9])
-}
-
-fn generate_sliding_map(size: usize, magics: &[MagicEntry], directions: &[i8]) -> Vec<u64> {
-    let mut map = vec![0; size];
-
+fn init_sliding_map(magics: &[MagicEntry], directions: &[i8], map: &mut [u64]) {
     for square in 0..64 {
         let entry = &magics[square as usize];
 
         let mut occupancies = 0u64;
-        for _ in 0..get_permutation_count(entry.mask) {
+        loop {
             let hash = magic_index(occupancies, entry);
             map[hash] = sliding_attacks(square, occupancies, directions);
 
-            occupancies = occupancies.wrapping_sub(entry.mask) & entry.mask;
+            occupancies = occupancies.wrapping_sub(!entry.mask) & !entry.mask;
+            if occupancies == 0 {
+                break;
+            }
         }
     }
-
-    map
-}
-
-const fn get_permutation_count(mask: u64) -> u64 {
-    1 << mask.count_ones()
 }
 
 const fn magic_index(occupancies: u64, entry: &MagicEntry) -> usize {
-    let mut hash = occupancies & entry.mask;
+    let mut hash = occupancies | entry.mask;
     hash = hash.wrapping_mul(entry.magic) >> entry.shift;
-    hash as usize + entry.offset
+    (hash as usize).wrapping_add_signed(entry.offset)
 }

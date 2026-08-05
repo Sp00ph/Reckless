@@ -99,7 +99,7 @@ pub fn rook_attacks(square: Square, occupancies: Bitboard) -> Bitboard {
         let entry = ROOK_MAGICS.get_unchecked(square as usize);
         let index = magic_index(occupancies, entry);
 
-        Bitboard(*ROOK_MAP.get_unchecked(index as usize))
+        Bitboard(*SLIDER_MAP.get_unchecked(index))
     }
 }
 
@@ -116,7 +116,7 @@ pub fn bishop_attacks(square: Square, occupancies: Bitboard) -> Bitboard {
         let entry = BISHOP_MAGICS.get_unchecked(square as usize);
         let index = magic_index(occupancies, entry);
 
-        Bitboard(*BISHOP_MAP.get_unchecked(index as usize))
+        Bitboard(*SLIDER_MAP.get_unchecked(index))
     }
 }
 
@@ -124,8 +124,8 @@ pub fn queen_attacks(square: Square, occupancies: Bitboard) -> Bitboard {
     rook_attacks(square, occupancies) | bishop_attacks(square, occupancies)
 }
 
-const fn magic_index(occupancies: Bitboard, entry: &MagicEntry) -> u32 {
-    let mut hash = occupancies.0 & entry.mask;
+const fn magic_index(occupancies: Bitboard, entry: &MagicEntry) -> usize {
+    let mut hash = occupancies.0 | entry.mask;
     hash = hash.wrapping_mul(entry.magic) >> entry.shift;
-    hash as u32 + entry.offset
+    (hash as usize).wrapping_add_signed(entry.offset as isize)
 }

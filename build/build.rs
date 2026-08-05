@@ -89,13 +89,12 @@ fn write(mut buf: BufWriter<File>) -> Result<(), std::io::Error> {
     write_map!("RAYPASS", "[u64; 64]", maps::generate_rays_map());
     write_map!("BETWEEN", "[u64; 64]", maps::generate_between_map());
 
-    write_map!("ROOK_MAP", "u64", maps::generate_rook_map());
-    write_map!("BISHOP_MAP", "u64", maps::generate_bishop_map());
+    write_map!("SLIDER_MAP", "u64", maps::generate_sliding_map());
 
     write_map!("ROOK_MAGICS", "MagicEntry", magics::ROOK_MAGICS);
     write_map!("BISHOP_MAGICS", "MagicEntry", magics::BISHOP_MAGICS);
 
-    writeln!(buf, "struct MagicEntry {{ pub mask: u64, pub magic: u64, pub shift: u32, pub offset: u32 }}")
+    writeln!(buf, "struct MagicEntry {{ pub mask: u64, pub magic: u64, pub shift: u32, pub offset: i32 }}")
 }
 
 fn download_network() {
